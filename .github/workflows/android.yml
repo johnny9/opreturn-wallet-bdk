@@ -19,8 +19,8 @@ jobs:
           java-version: "17"
           cache: gradle
       - uses: android-actions/setup-android@v4
-      - name: Install Android 17 preview SDK
-        run: sdkmanager "platforms;android-37" "build-tools;37.0.0" --channel=3
+      - name: Install Android 17 SDK
+        run: sdkmanager "platforms;android-37.0" --channel=3
       - name: Verify
         run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintDebug :app:assembleDebug
       - name: Upload debug APK
