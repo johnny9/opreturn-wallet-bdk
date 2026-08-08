@@ -30,6 +30,27 @@ text
 
 The commitment check allows witness/signature data to change while requiring every input outpoint, output value, and output script to remain identical to the approved preview.
 
+## Sweep pipeline
+
+```text
+external destination plus fee rate
+  → synchronize wallet
+  → validate destination against active network and reject wallet-owned scripts
+  → BDK TxBuilder.drainWallet and drainTo
+  → explicit RBF sequence and fee rate
+  → require every currently available UTXO as an input
+  → require exactly one non-wallet recipient output
+  → enforce recipient dust threshold and fee limits
+  → preview destination, inputs, amount, fee and zero change
+  → require typed SWEEP confirmation
+  → sign and compare with approved input/output commitment
+  → broadcast and monitor wallet transaction position
+```
+
+The fee is deducted from the single recipient output. A sweep never creates an OP_RETURN, anchor,
+or wallet change output. A future payment to a previously revealed address is not included in an
+already-broadcast sweep.
+
 ## Output policy
 
 - Exactly one `OP_RETURN` output.
@@ -48,3 +69,10 @@ The commitment check allows witness/signature data to change while requiring eve
 - Default maximum fee percentage: 10% of selected input value.
 - Anchor flows visibly warn when the fee exceeds the anchor value.
 - Developer consume mode is Regtest/debug-only, selects exactly one UTXO, creates no change, and retains the absolute fee limit.
+
+## Isolated Mainnet trial build
+
+The `mainnetTrial` build type uses application ID `org.opreturnwallet.bdk.mainnettrial`. Android
+therefore gives it storage and Keystore namespaces separate from the normal application. Repository
+checks reject every network except Mainnet, the UI requires a real-bitcoin acknowledgment before
+wallet creation or restore, and `ENABLE_DEBUG_CONSUME_UTXO` is false.

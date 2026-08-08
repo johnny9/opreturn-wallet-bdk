@@ -15,6 +15,8 @@ import org.bitcoindevkit.Persister
 import org.bitcoindevkit.Wallet
 import org.bitcoindevkit.Txid
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -95,6 +97,54 @@ class RegtestTransactionInstrumentedTest {
     }
 
     @Test
+    fun sweepSpendsEveryUtxoToOneExternalAddressWithoutChange() {
+        val spendable = wallet.listUnspent().filterNot { it.isSpent }
+        val destinationWallet = newUnfundedWallet("sweep-destination")
+        val destination = destinationWallet.nextUnusedAddress(KeychainKind.EXTERNAL).address.toString()
+
+        val preview = SweepTransactionService().buildPreview(
+            wallet = wallet,
+            persister = persister,
+            network = WalletNetwork.REGTEST,
+            destination = destination,
+            requestedFeeRateSatVb = 1.0,
+            limits = FeeSafetyLimits(maximumFeePercentOfInputs = 100.0),
+        )
+
+        assertEquals(spendable.size, preview.inputCount)
+        assertEquals(spendable.size, preview.unsignedTransaction.input().size)
+        assertEquals(1, preview.unsignedTransaction.output().size)
+        assertEquals(
+            preview.inputValueSats,
+            preview.recipientValueSats + preview.feeSats,
+        )
+        val output = preview.unsignedTransaction.output().single()
+        assertTrue(
+            output.scriptPubkey.toBytes().contentEquals(
+                org.bitcoindevkit.Address(destination, Network.REGTEST).scriptPubkey().toBytes(),
+            ),
+        )
+        assertFalse(wallet.isMine(output.scriptPubkey))
+        assertTrue(preview.unsignedTransaction.isExplicitlyRbf())
+        assertTrue(OpReturnScript.decode(output.scriptPubkey.toBytes()) == null)
+    }
+
+    @Test
+    fun sweepRejectsDestinationOwnedByTheSameWallet() {
+        val selfAddress = wallet.nextUnusedAddress(KeychainKind.EXTERNAL).address.toString()
+        assertThrows(TransactionPolicyException.DestinationBelongsToWallet::class.java) {
+            SweepTransactionService().buildPreview(
+                wallet = wallet,
+                persister = persister,
+                network = WalletNetwork.REGTEST,
+                destination = selfAddress,
+                requestedFeeRateSatVb = 1.0,
+                limits = FeeSafetyLimits(maximumFeePercentOfInputs = 100.0),
+            )
+        }
+    }
+
+    @Test
     fun broadcastReplacementPreservesMessageAndOpReturnNeverBecomesUtxo() {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("Set runBroadcastTests=true to authorize Regtest broadcasts", args.getString("runBroadcastTests") == "true")
@@ -144,5 +194,14 @@ class RegtestTransactionInstrumentedTest {
             Thread.sleep(250)
         }
         error("Transaction was not visible through Esplora")
+    }
+
+    private fun newUnfundedWallet(label: String): Wallet {
+        val mnemonic = Mnemonic(org.bitcoindevkit.WordCount.WORDS12)
+        val root = DescriptorSecretKey(Network.REGTEST, mnemonic, null)
+        val external = Descriptor.newBip84(root, KeychainKind.EXTERNAL, Network.REGTEST)
+        val internal = Descriptor.newBip84(root, KeychainKind.INTERNAL, Network.REGTEST)
+        val database = File(context.cacheDir, "$label-${System.nanoTime()}.sqlite3")
+        return Wallet(external, internal, Network.REGTEST, Persister.newSqlite(database.absolutePath))
     }
 }

@@ -4,6 +4,7 @@ import android.app.Application
 import org.opreturnwallet.bdk.storage.EncryptedSeedStore
 import org.opreturnwallet.bdk.storage.WalletPreferences
 import org.opreturnwallet.bdk.transaction.MessageTransactionService
+import org.opreturnwallet.bdk.transaction.SweepTransactionService
 import org.opreturnwallet.bdk.wallet.WalletRepository
 
 class OpReturnWalletApplication : Application() {
@@ -22,10 +23,13 @@ class AppContainer(application: Application) {
     private val transactionService = MessageTransactionService(
         debugConsumeEnabled = BuildConfig.ENABLE_DEBUG_CONSUME_UTXO,
     )
+    private val sweepTransactionService = SweepTransactionService()
     val walletRepository = WalletRepository(
         filesPath = application.filesDir.absolutePath,
         preferences = preferences,
         encryptedSeedStore = seedStore,
         transactionService = transactionService,
+        sweepTransactionService = sweepTransactionService,
+        mainnetOnly = BuildConfig.MAINNET_TRIAL,
     )
 }

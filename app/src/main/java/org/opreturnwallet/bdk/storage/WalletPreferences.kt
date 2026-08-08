@@ -8,6 +8,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import org.opreturnwallet.bdk.security.SensitiveModel
 import org.opreturnwallet.bdk.wallet.WalletNetwork
 
 private val Context.walletDataStore by preferencesDataStore(name = "wallet_metadata")
@@ -17,7 +18,7 @@ data class WalletMetadata(
     val network: WalletNetwork,
     val fullScanComplete: Boolean,
     val biometricUnlockEnabled: Boolean,
-)
+) : SensitiveModel("WalletMetadata")
 
 class WalletPreferences(private val context: Context) {
     private object Keys {

@@ -15,11 +15,24 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "ENABLE_DEBUG_CONSUME_UTXO", "false")
+        buildConfigField("boolean", "MAINNET_TRIAL", "false")
     }
 
     buildTypes {
         debug {
             buildConfigField("boolean", "ENABLE_DEBUG_CONSUME_UTXO", "true")
+        }
+        create("mainnetTrial") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".mainnettrial"
+            versionNameSuffix = "-mainnet-trial"
+            isDebuggable = false
+            isJniDebuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("debug")
+            buildConfigField("boolean", "ENABLE_DEBUG_CONSUME_UTXO", "false")
+            buildConfigField("boolean", "MAINNET_TRIAL", "true")
+            resValue("string", "app_name", "OP_RETURN Wallet Mainnet Trial")
         }
         release {
             isMinifyEnabled = true
@@ -34,6 +47,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        resValues = true
     }
 
     compileOptions {
@@ -74,7 +88,11 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     //noinspection NewerVersionAvailable -- 3.x is a deliberate future migration; variant/2.0 uses the 2.x API.
-    implementation("org.bitcoindevkit:bdk-android:2.3.1")
+    implementation("org.bitcoindevkit:bdk-android:2.3.1") {
+        // bdk-android does not reference this optional API; omit it so the wallet ships no
+        // application logging facade that could later be bound to Logcat accidentally.
+        exclude(group = "org.slf4j", module = "slf4j-api")
+    }
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

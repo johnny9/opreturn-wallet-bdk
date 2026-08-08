@@ -21,13 +21,23 @@ jobs:
       - uses: android-actions/setup-android@v4
       - name: Install Android 17 SDK
         run: sdkmanager "platforms;android-37.0" --channel=3
+      - name: Reject sensitive logging
+        run: bash scripts/check-sensitive-logging.sh
       - name: Verify
-        run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintDebug :app:assembleDebug
+        run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintDebug :app:lintMainnetTrial :app:assembleDebug :app:assembleMainnetTrial
       - name: Upload debug APK
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v7
         with:
           name: opreturn-wallet-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload isolated mainnet trial APK
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: opreturn-wallet-mainnet-trial-${{ github.sha }}
+          path: app/build/outputs/apk/mainnetTrial/app-mainnetTrial.apk
           if-no-files-found: error
           retention-days: 14

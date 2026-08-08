@@ -2,6 +2,7 @@ package org.opreturnwallet.bdk.message
 
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
+import org.opreturnwallet.bdk.security.SensitiveModel
 
 const val CONSERVATIVE_OP_RETURN_MAX_BYTES = 80
 
@@ -10,7 +11,7 @@ data class OpReturnPayload(
     val utf8Bytes: ByteArray,
     val hex: String,
     val byteCount: Int,
-) {
+) : SensitiveModel("OpReturnPayload") {
     companion object {
         fun fromText(
             text: String,

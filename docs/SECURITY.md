@@ -9,7 +9,12 @@ This is security-sensitive wallet software. Treat the current release as an audi
 - The encrypted file contains only a version, random GCM IV, and authenticated ciphertext.
 - Android application backup and device-transfer extraction are disabled for files, preferences, and databases.
 - DataStore contains only wallet ID, network, scan state, and feature settings.
-- Source code contains no seed, descriptor, PSBT, or message logging.
+- Production source contains no logging calls. CI rejects Logcat, stdout/stderr, stack-trace,
+  common logging-facade, and secret-descriptor stringification APIs.
+- Models containing a seed phrase, pending message, address, UTXO, wallet balance, transaction,
+  descriptor-derived state, or PSBT inherit a final redacted `toString()` implementation.
+- The unused transitive SLF4J API from BDK Android is excluded, so no application logging facade
+  is packaged or available for accidental binding.
 
 The optional biometric/device-credential prompt is an application unlock gate. It is required at startup and again after the app leaves the foreground. The AES key remains Keystore-protected but is not currently generated with per-use biometric authorization, avoiding permanent wallet loss when biometric enrollment changes. A later hardened mode may re-wrap the seed under an authentication-bound key with an explicit recovery path.
 
@@ -25,6 +30,8 @@ Android `FLAG_SECURE` is applied to restore, recovery phrase, verification, and 
 - The signed transaction must match the preview commitment before broadcast.
 - Public/permanent acknowledgment is mandatory.
 - Mainnet wallet creation is hidden until explicitly enabled.
+- The Mainnet trial APK uses a separate application ID and repository-level Mainnet-only check.
+- Sweeps reject self-owned and wrong-network destinations, spend every available UTXO, create one external output, and require a typed confirmation.
 - Only emulator-local Regtest cleartext traffic is permitted; public endpoints require TLS.
 
 ## Remaining risks
@@ -33,4 +40,5 @@ Android `FLAG_SECURE` is applied to restore, recovery phrase, verification, and 
 - Secrets necessarily exist in application memory while a software wallet is open.
 - The app has not received an external security audit.
 - Live Signet recovery and confirmation acceptance must be completed for each release build.
+- A sweep does not erase seed material, cover later incoming payments, or prove receipt before confirmation.
 - Custom endpoints, hardware signing, authenticated Tor transport, and reproducible release builds are future work.

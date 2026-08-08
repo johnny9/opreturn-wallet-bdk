@@ -1,7 +1,10 @@
 package org.opreturnwallet.bdk.ui
 
 import org.opreturnwallet.bdk.transaction.TransactionPreview
+import org.opreturnwallet.bdk.transaction.SweepTransactionPreview
+import org.opreturnwallet.bdk.security.SensitiveModel
 import org.opreturnwallet.bdk.wallet.MessageTransactionRecord
+import org.opreturnwallet.bdk.wallet.SweepTransactionRecord
 import org.opreturnwallet.bdk.wallet.WalletNetwork
 import org.opreturnwallet.bdk.wallet.WalletSnapshot
 import org.opreturnwallet.bdk.wallet.SpendableUtxo
@@ -17,6 +20,9 @@ enum class Screen {
     COMPOSE_MESSAGE,
     PREVIEW,
     RESULT,
+    SWEEP,
+    SWEEP_PREVIEW,
+    SWEEP_RESULT,
     SETTINGS,
 }
 
@@ -54,7 +60,12 @@ data class WalletUiState(
     val preview: TransactionPreview? = null,
     val permanentAcknowledged: Boolean = false,
     val result: MessageTransactionRecord? = null,
+    val sweepDestinationAddress: String = "",
+    val sweepFeeRateText: String = "2.0",
+    val sweepPreview: SweepTransactionPreview? = null,
+    val sweepConfirmationText: String = "",
+    val sweepResult: SweepTransactionRecord? = null,
     val biometricUnlockEnabled: Boolean = false,
     val busy: Boolean = false,
     val error: String? = null,
-)
+) : SensitiveModel("WalletUiState")

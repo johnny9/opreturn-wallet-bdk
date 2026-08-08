@@ -35,6 +35,7 @@ A hidden debug-only Regtest mode can consume one manually selected UTXO without 
 - RBF signaling, minimum 1 sat/vB, absolute and percentage fee caps
 - Mandatory public/permanent acknowledgment before signing
 - Signed-transaction input/output commitment verification immediately before broadcast
+- Full-wallet sweep to one network-validated external address, with no change and fee deducted
 - Message history, decoded payload, status, block height, and network explorer links
 
 ## Project layout
@@ -61,9 +62,17 @@ Requirements:
 
 ```bash
 ./gradlew :app:assembleDebug
+./gradlew :app:assembleMainnetTrial
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:lintDebug
 ```
+
+`assembleMainnetTrial` produces a separately installable APK at
+`app/build/outputs/apk/mainnetTrial/app-mainnetTrial.apk`. Its application ID is
+`org.opreturnwallet.bdk.mainnettrial`, so Android isolates its wallet database, preferences,
+Keystore entries, and files from the ordinary Signet-first installation. The build only permits
+Mainnet wallet creation, keeps the explicit real-bitcoin acknowledgment, labels itself as a trial,
+and compiles out the dangerous Regtest consume mode.
 
 BDK is pinned to `org.bitcoindevkit:bdk-android:2.3.1`, the newest stable release compatible with the maintained 2.x reference baseline when this project was created. A future BDK 3.x upgrade should be handled as an explicit migration.
 
@@ -81,6 +90,21 @@ Public endpoints are a privacy compromise: they can correlate the addresses quer
 ## Release acceptance
 
 The source and automated policy tests cover the MVP behavior. Before distributing an APK, complete the funded-device Regtest and Signet acceptance procedures in [Testing](docs/TESTING.md), including confirmation and recovery rediscovery. Never test mainnet with funds you cannot afford to lose.
+
+## Sweeping funds off the phone
+
+The Home screen can construct a sweep to an address controlled by another wallet. A sweep:
+
+- synchronizes immediately before construction;
+- spends every currently available wallet UTXO;
+- creates exactly one external recipient output and no change or OP_RETURN output;
+- deducts the mining fee from the recipient amount;
+- rejects an address owned by this wallet or from the wrong network;
+- retains RBF, absolute-fee, percentage-fee, dust, preview, and signed-transaction checks;
+- requires typing `SWEEP` before signing and broadcasting.
+
+A sweep only moves currently spendable funds. It does not erase the encrypted recovery phrase,
+protect against later incoming payments, or replace confirmation in the receiving wallet.
 
 ## License
 

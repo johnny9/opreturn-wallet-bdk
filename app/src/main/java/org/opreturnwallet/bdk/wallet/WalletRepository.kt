@@ -21,6 +21,8 @@ import org.opreturnwallet.bdk.storage.WalletMetadata
 import org.opreturnwallet.bdk.storage.WalletPreferences
 import org.opreturnwallet.bdk.transaction.FeeSafetyLimits
 import org.opreturnwallet.bdk.transaction.MessageTransactionService
+import org.opreturnwallet.bdk.transaction.SweepTransactionPreview
+import org.opreturnwallet.bdk.transaction.SweepTransactionService
 import org.opreturnwallet.bdk.transaction.TransactionPreview
 import org.opreturnwallet.bdk.transaction.WriteMode
 import org.opreturnwallet.bdk.message.OpReturnPayload
@@ -31,6 +33,8 @@ class WalletRepository(
     private val preferences: WalletPreferences,
     private val encryptedSeedStore: EncryptedSeedStore,
     private val transactionService: MessageTransactionService,
+    private val sweepTransactionService: SweepTransactionService,
+    private val mainnetOnly: Boolean = false,
 ) {
     @Volatile
     private var activeSession: WalletSession? = null
@@ -41,14 +45,14 @@ class WalletRepository(
         preferences.currentMetadata()?.biometricUnlockEnabled ?: false
 
     suspend fun create(network: WalletNetwork): CreatedWallet = withContext(Dispatchers.IO) {
-        enforceMainnetGate(network)
+        enforceNetwork(network)
         val mnemonic = Mnemonic(WordCount.WORDS12)
         createFromMnemonic(network, mnemonic, mnemonic.toString())
     }
 
     suspend fun restore(network: WalletNetwork, recoveryPhrase: String): CreatedWallet =
         withContext(Dispatchers.IO) {
-            enforceMainnetGate(network)
+            enforceNetwork(network)
             val mnemonic = Mnemonic.fromString(recoveryPhrase.trim())
             createFromMnemonic(network, mnemonic, mnemonic.toString())
         }
@@ -56,6 +60,9 @@ class WalletRepository(
     suspend fun load(): WalletSession = withContext(Dispatchers.IO) {
         activeSession ?: run {
             val metadata = preferences.currentMetadata() ?: error("No wallet has been created")
+            if (mainnetOnly) check(metadata.network == WalletNetwork.MAINNET) {
+                "The isolated mainnet build can only load a Mainnet wallet"
+            }
             val mnemonicText = encryptedSeedStore.read(metadata.walletId)
             val mnemonic = Mnemonic.fromString(mnemonicText)
             val descriptors = descriptors(metadata.network, mnemonic)
@@ -142,6 +149,38 @@ class WalletRepository(
             )
         }
 
+    suspend fun buildSweepPreview(
+        destinationAddress: String,
+        feeRateSatVb: Double,
+        limits: FeeSafetyLimits = FeeSafetyLimits(),
+    ): SweepTransactionPreview = withContext(Dispatchers.IO) {
+        val session = load()
+        sweepTransactionService.buildPreview(
+            wallet = session.wallet,
+            persister = session.persister,
+            network = session.network,
+            destination = destinationAddress,
+            requestedFeeRateSatVb = feeRateSatVb,
+            limits = limits,
+        )
+    }
+
+    suspend fun signAndBroadcastSweep(preview: SweepTransactionPreview): SweepTransactionRecord =
+        withContext(Dispatchers.IO) {
+            val session = load()
+            val signed = sweepTransactionService.signApproved(session.wallet, preview)
+            EsploraChainService(session.network).broadcast(signed)
+            session.wallet.persist(session.persister)
+            SweepTransactionRecord(
+                txid = signed.computeTxid().toString(),
+                destinationAddress = preview.destinationAddress,
+                amountSats = preview.recipientValueSats,
+                feeSats = preview.feeSats,
+                pending = true,
+                blockHeight = null,
+            )
+        }
+
     suspend fun setBiometricUnlockEnabled(enabled: Boolean) {
         preferences.setBiometricUnlockEnabled(enabled)
     }
@@ -181,7 +220,12 @@ class WalletRepository(
         }
     }
 
-    private suspend fun enforceMainnetGate(network: WalletNetwork) {
+    private suspend fun enforceNetwork(network: WalletNetwork) {
+        if (mainnetOnly) {
+            check(network == WalletNetwork.MAINNET) {
+                "The isolated mainnet build only permits Mainnet wallets"
+            }
+        }
         if (network.isMainnet) {
             check(preferences.mainnetEnabled.first()) {
                 "Mainnet must be explicitly enabled before creating a wallet"
@@ -204,7 +248,15 @@ class WalletRepository(
         val pending = balance.trustedPending.toSat() + balance.untrustedPending.toSat()
         val receiveAddress = wallet.nextUnusedAddress(KeychainKind.EXTERNAL).address.toString()
         wallet.persist(session.persister)
-        val messages = wallet.transactions().mapNotNull { canonicalTx ->
+        val transactions = wallet.transactions()
+        val transactionStatuses = transactions.associate { canonicalTx ->
+            val position = canonicalTx.chainPosition
+            canonicalTx.transaction.computeTxid().toString() to WalletTransactionStatus(
+                pending = position is ChainPosition.Unconfirmed,
+                blockHeight = (position as? ChainPosition.Confirmed)?.confirmationBlockTime?.blockId?.height,
+            )
+        }
+        val messages = transactions.mapNotNull { canonicalTx ->
             val matches = canonicalTx.transaction.output().mapNotNull { output ->
                 OpReturnScript.decode(output.scriptPubkey.toBytes())
             }
@@ -232,6 +284,7 @@ class WalletRepository(
             ),
             receiveAddress = receiveAddress,
             messages = messages,
+            transactionStatuses = transactionStatuses,
         )
     }
 

@@ -6,7 +6,9 @@
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:compileDebugAndroidTestKotlin
 ./gradlew :app:lintDebug
+./gradlew :app:lintMainnetTrial
 ./gradlew :app:assembleDebug
+./gradlew :app:assembleMainnetTrial
 ```
 
 Unit coverage includes:
@@ -17,7 +19,8 @@ Unit coverage includes:
 - embedded newline preservation and exact hex;
 - direct and `PUSHDATA1` OP_RETURN parsing;
 - anchor dust thresholds;
-- absolute and percentage fee caps.
+- absolute and percentage fee caps;
+- sensitive model string representations remain redacted.
 
 The always-safe Android test verifies address/network mismatch rejection. Live transaction tests are opt-in because they require a funded wallet and can broadcast.
 
@@ -34,6 +37,10 @@ The always-safe Android test verifies address/network mismatch rejection. Live t
 - an actual higher-fee replacement when broadcast testing is authorized;
 - no OP_RETURN entry in BDK's output set;
 - balance reduction by replacement fee.
+- sweep selection of every available UTXO;
+- exactly one external sweep output with no change or OP_RETURN;
+- sweep input value equaling recipient value plus fee;
+- rejection of a sweep destination owned by the same wallet.
 
 Provide live-test secrets through a local Android Studio instrumentation configuration or another non-versioned secret provider. Do not put recovery phrases in shell history, project files, CI variables for untrusted jobs, logs, or chat.
 
@@ -53,4 +60,17 @@ Before a release, also manually verify screenshot blocking, biometric enrollment
 
 ## Mainnet
 
-Mainnet is not part of first-release acceptance. Keep it disabled until the Signet lifecycle test, a security review, and reproducible release signing have all been completed.
+The isolated `mainnetTrial` build exists for an explicitly accepted, low-value manual trial. It is
+not a production release. Before funding it, verify its distinct application ID and label, create a
+fresh recovery phrase, verify that backup, and confirm the normal Signet installation remains intact.
+
+Before broadcasting a Mainnet message or sweep, manually verify:
+
+- the synchronized balance and transaction history;
+- the exact destination network and full address on both devices;
+- all previewed inputs, output value, fee, fee rate, and zero change for a sweep;
+- a signed transaction commitment match;
+- receipt and confirmation in the external wallet before removing local wallet data.
+
+Use only funds the tester can afford to lose. External security review and reproducible release
+signing remain required before calling any build production-ready.

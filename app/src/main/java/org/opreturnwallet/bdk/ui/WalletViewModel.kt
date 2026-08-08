@@ -35,6 +35,7 @@ class WalletViewModel(
             _state.update {
                 it.copy(
                     mainnetEnabled = mainnet,
+                    selectedNetwork = if (BuildConfig.MAINNET_TRIAL) WalletNetwork.MAINNET else it.selectedNetwork,
                     biometricUnlockEnabled = biometric,
                     screen = when {
                         !hasWallet -> Screen.WELCOME
@@ -48,6 +49,7 @@ class WalletViewModel(
     }
 
     fun selectNetwork(network: WalletNetwork) {
+        if (BuildConfig.MAINNET_TRIAL && network != WalletNetwork.MAINNET) return
         if (network.isMainnet && !_state.value.mainnetEnabled) return
         _state.update { it.copy(selectedNetwork = network, error = null) }
     }
@@ -58,7 +60,11 @@ class WalletViewModel(
             _state.update {
                 it.copy(
                     mainnetEnabled = enabled,
-                    selectedNetwork = if (!enabled && it.selectedNetwork.isMainnet) WalletNetwork.SIGNET else it.selectedNetwork,
+                    selectedNetwork = when {
+                        BuildConfig.MAINNET_TRIAL -> WalletNetwork.MAINNET
+                        !enabled && it.selectedNetwork.isMainnet -> WalletNetwork.SIGNET
+                        else -> it.selectedNetwork
+                    },
                 )
             }
         }
@@ -140,9 +146,15 @@ class WalletViewModel(
                         val updatedResult = state.result?.let { result ->
                             snapshot.messages.firstOrNull { it.txid == result.txid } ?: result
                         }
+                        val updatedSweepResult = state.sweepResult?.let { result ->
+                            snapshot.transactionStatuses[result.txid]?.let { status ->
+                                result.copy(pending = status.pending, blockHeight = status.blockHeight)
+                            } ?: result
+                        }
                         state.copy(
                             snapshot = snapshot,
                             result = updatedResult,
+                            sweepResult = updatedSweepResult,
                             screen = if (state.screen == Screen.LOADING) Screen.HOME else state.screen,
                             syncStatus = SyncStatus.CURRENT,
                         )
@@ -235,6 +247,72 @@ class WalletViewModel(
         _state.update { it.copy(result = result, preview = null, screen = Screen.RESULT) }
     }
 
+    fun startSweep() {
+        check((_state.value.snapshot?.balance?.totalSats ?: 0uL) > 0uL) {
+            "The wallet has no funds to sweep"
+        }
+        _state.update {
+            it.copy(
+                screen = Screen.SWEEP,
+                sweepDestinationAddress = "",
+                sweepPreview = null,
+                sweepConfirmationText = "",
+                sweepResult = null,
+                error = null,
+            )
+        }
+        viewModelScope.launch {
+            runCatching { repository.estimatedFeeRate() }
+                .onSuccess { estimate ->
+                    _state.update { it.copy(sweepFeeRateText = "%.2f".format(estimate)) }
+                }
+        }
+    }
+
+    fun updateSweepDestination(value: String) =
+        _state.update { it.copy(sweepDestinationAddress = value, error = null) }
+
+    fun updateSweepFeeRate(value: String) =
+        _state.update { it.copy(sweepFeeRateText = value, error = null) }
+
+    fun buildSweepPreview() = launchBusy {
+        val current = _state.value
+        val feeRate = current.sweepFeeRateText.toDoubleOrNull() ?: error("Enter a valid fee rate")
+        val synchronized = repository.sync()
+        val preview = repository.buildSweepPreview(
+            destinationAddress = current.sweepDestinationAddress,
+            feeRateSatVb = feeRate,
+        )
+        _state.update {
+            it.copy(
+                snapshot = synchronized,
+                sweepPreview = preview,
+                sweepConfirmationText = "",
+                screen = Screen.SWEEP_PREVIEW,
+            )
+        }
+    }
+
+    fun updateSweepConfirmation(value: String) =
+        _state.update { it.copy(sweepConfirmationText = value, error = null) }
+
+    fun broadcastSweep() = launchBusy {
+        val current = _state.value
+        check(current.sweepConfirmationText == SWEEP_CONFIRMATION) {
+            "Type $SWEEP_CONFIRMATION to authorize the sweep"
+        }
+        val preview = current.sweepPreview ?: error("Sweep preview is missing")
+        val result = repository.signAndBroadcastSweep(preview)
+        _state.update {
+            it.copy(
+                sweepResult = result,
+                sweepPreview = null,
+                sweepConfirmationText = "",
+                screen = Screen.SWEEP_RESULT,
+            )
+        }
+    }
+
     fun showSettings() = _state.update { it.copy(screen = Screen.SETTINGS, error = null) }
 
     fun setBiometricUnlockEnabled(enabled: Boolean) {
@@ -256,6 +334,9 @@ class WalletViewModel(
                 messageByteCount = 0,
                 preview = null,
                 permanentAcknowledged = false,
+                sweepDestinationAddress = "",
+                sweepPreview = null,
+                sweepConfirmationText = "",
                 busy = false,
                 error = null,
             )
@@ -263,7 +344,16 @@ class WalletViewModel(
     }
 
     fun goHome() {
-        _state.update { it.copy(screen = Screen.HOME, preview = null, error = null) }
+        _state.update {
+            it.copy(
+                screen = Screen.HOME,
+                preview = null,
+                sweepPreview = null,
+                sweepConfirmationText = "",
+                error = null,
+            )
+        }
+        refresh()
     }
 
     fun goBack() {
@@ -275,11 +365,16 @@ class WalletViewModel(
                     Screen.COMPOSE_MESSAGE,
                     Screen.PREVIEW,
                     Screen.RESULT,
+                    Screen.SWEEP,
+                    Screen.SWEEP_RESULT,
                     Screen.SETTINGS,
                     -> Screen.HOME
+                    Screen.SWEEP_PREVIEW -> Screen.SWEEP
                     else -> current.screen
                 },
                 preview = if (current.screen == Screen.PREVIEW) null else current.preview,
+                sweepPreview = if (current.screen == Screen.SWEEP_PREVIEW) null else current.sweepPreview,
+                sweepConfirmationText = if (current.screen == Screen.SWEEP_PREVIEW) "" else current.sweepConfirmationText,
                 restorePhrase = if (current.screen == Screen.RESTORE) "" else current.restorePhrase,
                 error = null,
             )
@@ -293,7 +388,7 @@ class WalletViewModel(
         monitorJob = viewModelScope.launch {
             while (true) {
                 delay(30.seconds)
-                if (_state.value.screen in setOf(Screen.HOME, Screen.RESULT)) refresh()
+                if (_state.value.screen in setOf(Screen.HOME, Screen.RESULT, Screen.SWEEP_RESULT)) refresh()
             }
         }
     }
@@ -320,5 +415,9 @@ class WalletViewModel(
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
             WalletViewModel(repository, preferences) as T
+    }
+
+    private companion object {
+        const val SWEEP_CONFIRMATION = "SWEEP"
     }
 }

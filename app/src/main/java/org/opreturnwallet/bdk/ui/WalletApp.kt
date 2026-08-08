@@ -125,6 +125,9 @@ fun OpReturnWalletApp(viewModel: WalletViewModel) {
                     Screen.COMPOSE_MESSAGE -> ComposeMessageScreen(state, viewModel)
                     Screen.PREVIEW -> PreviewScreen(state, viewModel)
                     Screen.RESULT -> ResultScreen(state, viewModel)
+                    Screen.SWEEP -> SweepScreen(state, viewModel)
+                    Screen.SWEEP_PREVIEW -> SweepPreviewScreen(state, viewModel)
+                    Screen.SWEEP_RESULT -> SweepResultScreen(state, viewModel)
                     Screen.SETTINGS -> SettingsScreen(state, viewModel)
                 }
             }
@@ -136,34 +139,55 @@ fun OpReturnWalletApp(viewModel: WalletViewModel) {
 private fun WelcomeScreen(state: WalletUiState, viewModel: WalletViewModel) {
     var advancedExpanded by remember { mutableStateOf(false) }
     ScreenColumn {
-        Text("Write to Bitcoin", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+        Text(
+            if (BuildConfig.MAINNET_TRIAL) "Mainnet trial wallet" else "Write to Bitcoin",
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold,
+        )
         Text(
             "A focused wallet for publishing one conservative UTF-8 OP_RETURN message while returning the rest to change.",
             style = MaterialTheme.typography.bodyLarge,
         )
         PrivacyCard()
+        if (BuildConfig.MAINNET_TRIAL) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("REAL BITCOIN", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                    Text("This separately installed build only creates Mainnet wallets. Use a fresh phrase and a small test balance.")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = state.mainnetEnabled,
+                            onCheckedChange = viewModel::setMainnetEnabled,
+                        )
+                        Text("I understand Mainnet transactions spend real bitcoin")
+                    }
+                }
+            }
+        }
         Text("Network", style = MaterialTheme.typography.titleMedium)
         NetworkSelector(state, viewModel)
         Button(
             onClick = viewModel::createWallet,
-            enabled = !state.busy,
+            enabled = !state.busy && (!BuildConfig.MAINNET_TRIAL || state.mainnetEnabled),
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Create software wallet") }
         OutlinedButton(
             onClick = viewModel::showRestore,
-            enabled = !state.busy,
+            enabled = !state.busy && (!BuildConfig.MAINNET_TRIAL || state.mainnetEnabled),
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Restore from recovery phrase") }
-        TextButton(onClick = { advancedExpanded = !advancedExpanded }) {
-            Text(if (advancedExpanded) "Hide advanced networks" else "Advanced network settings")
-        }
-        if (advancedExpanded) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(
-                    checked = state.mainnetEnabled,
-                    onCheckedChange = viewModel::setMainnetEnabled,
-                )
-                Text("I understand this enables real-bitcoin mainnet transactions")
+        if (!BuildConfig.MAINNET_TRIAL) {
+            TextButton(onClick = { advancedExpanded = !advancedExpanded }) {
+                Text(if (advancedExpanded) "Hide advanced networks" else "Advanced network settings")
+            }
+            if (advancedExpanded) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = state.mainnetEnabled,
+                        onCheckedChange = viewModel::setMainnetEnabled,
+                    )
+                    Text("I understand this enables real-bitcoin mainnet transactions")
+                }
             }
         }
         BusyIndicator(state.busy)
@@ -172,7 +196,7 @@ private fun WelcomeScreen(state: WalletUiState, viewModel: WalletViewModel) {
 
 @Composable
 private fun NetworkSelector(state: WalletUiState, viewModel: WalletViewModel) {
-    val networks = buildList {
+    val networks = if (BuildConfig.MAINNET_TRIAL) listOf(WalletNetwork.MAINNET) else buildList {
         add(WalletNetwork.REGTEST)
         add(WalletNetwork.SIGNET)
         add(WalletNetwork.TESTNET4)
@@ -183,6 +207,7 @@ private fun NetworkSelector(state: WalletUiState, viewModel: WalletViewModel) {
             FilterChip(
                 selected = state.selectedNetwork == network,
                 onClick = { viewModel.selectNetwork(network) },
+                enabled = !network.isMainnet || state.mainnetEnabled,
                 label = { Text(network.displayName) },
             )
         }
@@ -282,13 +307,24 @@ private fun HomeScreen(state: WalletUiState, viewModel: WalletViewModel) {
     ScreenColumn {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("OP_RETURN Wallet", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    if (BuildConfig.MAINNET_TRIAL) "OP_RETURN Wallet · Mainnet Trial" else "OP_RETURN Wallet",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                )
                 Text(snapshot.network.displayName, color = MaterialTheme.colorScheme.primary)
             }
             IconButton(onClick = viewModel::refresh) { Icon(Icons.Default.Refresh, "Sync") }
             IconButton(onClick = viewModel::showSettings) { Icon(Icons.Default.Settings, "Settings") }
         }
         BalanceCard(snapshot)
+        if (BuildConfig.MAINNET_TRIAL) {
+            Text(
+                "This isolated build uses real bitcoin. Verify every address and fee before signing.",
+                color = MaterialTheme.colorScheme.error,
+                fontWeight = FontWeight.Bold,
+            )
+        }
         Text(
             when (state.syncStatus) {
                 SyncStatus.SYNCING -> "Synchronizing…"
@@ -302,6 +338,11 @@ private fun HomeScreen(state: WalletUiState, viewModel: WalletViewModel) {
             OutlinedButton(onClick = { showReceive = true }, modifier = Modifier.weight(1f)) { Text("Receive") }
             Button(onClick = viewModel::startCompose, modifier = Modifier.weight(1f)) { Text("Write message") }
         }
+        OutlinedButton(
+            onClick = viewModel::startSweep,
+            enabled = snapshot.balance.totalSats > 0uL && !state.busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Sweep wallet to external address") }
         HorizontalDivider()
         Text("Previous message transactions", style = MaterialTheme.typography.titleLarge)
         if (snapshot.messages.isEmpty()) {
@@ -520,6 +561,108 @@ private fun ResultScreen(state: WalletUiState, viewModel: WalletViewModel) {
 }
 
 @Composable
+private fun SweepScreen(state: WalletUiState, viewModel: WalletViewModel) {
+    val snapshot = state.snapshot ?: return LoadingScreen("Loading wallet…")
+    ScreenColumn {
+        Text("Sweep wallet", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("MOVE ALL FUNDS", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                Text("Every currently spendable UTXO will be sent to one external address. The fee is deducted from that output and no change returns to this wallet.")
+                Text("Sweeping does not erase the encrypted recovery phrase from this phone.")
+            }
+        }
+        LabeledValue("Current wallet balance", "${snapshot.balance.totalSats} sats")
+        OutlinedTextField(
+            value = state.sweepDestinationAddress,
+            onValueChange = viewModel::updateSweepDestination,
+            label = { Text("External ${snapshot.network.displayName} destination") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = state.sweepFeeRateText,
+            onValueChange = viewModel::updateSweepFeeRate,
+            label = { Text("Fee rate (sat/vB)") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text("The wallet will synchronize again before constructing the preview.")
+        Button(
+            onClick = viewModel::buildSweepPreview,
+            enabled = state.sweepDestinationAddress.isNotBlank() && !state.busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Build sweep preview") }
+        BusyIndicator(state.busy)
+    }
+}
+
+@Composable
+private fun SweepPreviewScreen(state: WalletUiState, viewModel: WalletViewModel) {
+    val preview = state.sweepPreview ?: return LoadingScreen("Building sweep preview…")
+    ScreenColumn {
+        Text("Sweep preview", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Card(Modifier.fillMaxWidth()) {
+            Text(
+                "Verify this destination on the receiving wallet. This transaction sends the full spendable balance away from this phone with no change.",
+                modifier = Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.error,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        LabeledValue("Destination", preview.destinationAddress, monospace = true)
+        LabeledValue("Inputs", "${preview.inputCount} UTXO(s) · ${preview.inputValueSats} sats")
+        LabeledValue("Recipient receives", "${preview.recipientValueSats} sats")
+        LabeledValue("Mining fee", "${preview.feeSats} sats at ${"%.2f".format(preview.feeRateSatVb)} sat/vB")
+        LabeledValue("Estimated size", "${preview.estimatedVbytes} vB")
+        LabeledValue("Change", "0 sats · no wallet change output")
+        HorizontalDivider()
+        Text("Type SWEEP to confirm", fontWeight = FontWeight.Medium)
+        OutlinedTextField(
+            value = state.sweepConfirmationText,
+            onValueChange = viewModel::updateSweepConfirmation,
+            label = { Text("Confirmation") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+            onClick = viewModel::broadcastSweep,
+            enabled = state.sweepConfirmationText == "SWEEP" && !state.busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Sign and broadcast sweep") }
+        BusyIndicator(state.busy)
+    }
+}
+
+@Composable
+private fun SweepResultScreen(state: WalletUiState, viewModel: WalletViewModel) {
+    val result = state.sweepResult ?: return LoadingScreen("Finishing sweep…")
+    val network = state.snapshot?.network ?: state.selectedNetwork
+    val context = LocalContext.current
+    ScreenColumn {
+        Text("Sweep broadcast", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        LabeledValue("Status", if (result.pending) "Pending" else "Confirmed at block ${result.blockHeight}")
+        LabeledValue("Sent", "${result.amountSats} sats")
+        LabeledValue("Fee", "${result.feeSats} sats")
+        LabeledValue("Destination", result.destinationAddress, monospace = true)
+        LabeledValue("Transaction ID", result.txid, monospace = true)
+        Text("Wait for confirmation in the receiving wallet before removing this app or its recovery phrase.")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { copy(context, "Transaction ID", result.txid) }) {
+                Icon(Icons.Default.ContentCopy, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Copy transaction ID")
+            }
+            network.explorerUrl(result.txid)?.let { url ->
+                OutlinedButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }) {
+                    Text("Explorer")
+                }
+            }
+        }
+        Button(onClick = viewModel::goHome, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+    }
+}
+
+@Composable
 private fun SettingsScreen(state: WalletUiState, viewModel: WalletViewModel) {
     ScreenColumn {
         Text("Safety and privacy", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
@@ -544,10 +687,17 @@ private fun SettingsScreen(state: WalletUiState, viewModel: WalletViewModel) {
         }
         HorizontalDivider()
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = state.mainnetEnabled, onCheckedChange = viewModel::setMainnetEnabled)
+            Checkbox(
+                checked = state.mainnetEnabled,
+                onCheckedChange = viewModel::setMainnetEnabled,
+                enabled = !BuildConfig.MAINNET_TRIAL,
+            )
             Column {
-                Text("Enable mainnet", fontWeight = FontWeight.Medium)
-                Text("Allows wallets that spend real bitcoin", style = MaterialTheme.typography.bodySmall)
+                Text(if (BuildConfig.MAINNET_TRIAL) "Isolated Mainnet build" else "Enable mainnet", fontWeight = FontWeight.Medium)
+                Text(
+                    if (BuildConfig.MAINNET_TRIAL) "This installation only permits real-bitcoin Mainnet wallets" else "Allows wallets that spend real bitcoin",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
         Text("Custom Esplora servers are planned. Public endpoints can correlate your wallet addresses.")
@@ -681,6 +831,9 @@ private fun screenTitle(screen: Screen): String = when (screen) {
     Screen.COMPOSE_MESSAGE -> "Write message"
     Screen.PREVIEW -> "Preview"
     Screen.RESULT -> "Result"
+    Screen.SWEEP -> "Sweep wallet"
+    Screen.SWEEP_PREVIEW -> "Sweep preview"
+    Screen.SWEEP_RESULT -> "Sweep result"
     Screen.SETTINGS -> "Settings"
     else -> "OP_RETURN Wallet"
 }
