@@ -20,6 +20,7 @@ Unit coverage includes:
 - direct and `PUSHDATA1` OP_RETURN parsing;
 - anchor dust thresholds;
 - absolute and percentage fee caps;
+- fee-bump preservation, input, fee-rate, and incremental-fee policy;
 - sensitive model string representations remain redacted.
 
 The always-safe Android test verifies address/network mismatch rejection. Live transaction tests are opt-in because they require a funded wallet and can broadcast.
@@ -37,6 +38,7 @@ The always-safe Android test verifies address/network mismatch rejection. Live t
 - an actual higher-fee replacement when broadcast testing is authorized;
 - no OP_RETURN entry in BDK's output set;
 - balance reduction by replacement fee.
+- replacement preservation of the exact OP_RETURN payload through the production fee-bump service;
 - sweep selection of every available UTXO;
 - exactly one external sweep output with no change or OP_RETURN;
 - sweep input value equaling recipient value plus fee;

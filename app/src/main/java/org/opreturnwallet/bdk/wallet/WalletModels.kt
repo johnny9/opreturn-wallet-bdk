@@ -30,6 +30,8 @@ data class MessageTransactionRecord(
     val pending: Boolean,
     val blockHeight: UInt?,
     val feeSats: ULong?,
+    val feeRateSatVb: Double? = null,
+    val rbfEligible: Boolean = false,
 ) : SensitiveModel("MessageTransactionRecord")
 
 data class SweepTransactionRecord(
@@ -40,6 +42,16 @@ data class SweepTransactionRecord(
     val pending: Boolean,
     val blockHeight: UInt?,
 ) : SensitiveModel("SweepTransactionRecord")
+
+data class FeeBumpTransactionRecord(
+    val originalTxid: String,
+    val replacementTxid: String,
+    val originalFeeSats: ULong,
+    val replacementFeeSats: ULong,
+    val replacementFeeRateSatVb: Double,
+    val pending: Boolean,
+    val blockHeight: UInt?,
+) : SensitiveModel("FeeBumpTransactionRecord")
 
 data class WalletTransactionStatus(
     val pending: Boolean,

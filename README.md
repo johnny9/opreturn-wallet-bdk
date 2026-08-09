@@ -32,7 +32,8 @@ A hidden debug-only Regtest mode can consume one manually selected UTXO without 
 - Esplora full scan, incremental sync, fee estimates, broadcast, and confirmation polling
 - Exact strict UTF-8 encoding, live byte count, hex preview, and an 80-byte maximum
 - Standard, anchor-to-self, and anchor-to-recipient modes
-- RBF signaling, minimum 1 sat/vB, absolute and percentage fee caps
+- RBF signaling and previewed fee bumping for eligible pending message transactions
+- Minimum 1 sat/vB, absolute and percentage fee caps
 - Mandatory public/permanent acknowledgment before signing
 - Signed-transaction input/output commitment verification immediately before broadcast
 - Full-wallet sweep to one network-validated external address, with no change and fee deducted
@@ -105,6 +106,18 @@ The Home screen can construct a sweep to an address controlled by another wallet
 
 A sweep only moves currently spendable funds. It does not erase the encrypted recovery phrase,
 protect against later incoming payments, or replace confirmation in the receiving wallet.
+
+## Bumping a pending message fee
+
+Pending outgoing message transactions with opt-in RBF and internal wallet change expose a
+`Bump fee` action. The wallet synchronizes first, builds the replacement with BDK's fee-bump
+builder, and requires a second preview and acknowledgment before signing. Every original input
+must remain present, any newly selected input must already be confirmed, and every non-change
+output must retain its exact value and script. Only internal change may shrink or disappear.
+
+The replacement must pay both a higher fee rate and at least one additional satoshi per
+replacement virtual byte. The normal absolute and percentage fee caps still apply. Sweeps and
+other transactions without replaceable wallet change are intentionally not eligible.
 
 ## License
 

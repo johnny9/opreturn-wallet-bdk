@@ -5,15 +5,12 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import org.bitcoindevkit.Descriptor
 import org.bitcoindevkit.DescriptorSecretKey
-import org.bitcoindevkit.BumpFeeTxBuilder
 import org.bitcoindevkit.EsploraClient
-import org.bitcoindevkit.FeeRate
 import org.bitcoindevkit.KeychainKind
 import org.bitcoindevkit.Mnemonic
 import org.bitcoindevkit.Network
 import org.bitcoindevkit.Persister
 import org.bitcoindevkit.Wallet
-import org.bitcoindevkit.Txid
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -166,15 +163,18 @@ class RegtestTransactionInstrumentedTest {
         client.broadcast(originalTx)
         syncUntilSeen(client, originalTx.computeTxid().toString())
 
-        val replacementPsbt = BumpFeeTxBuilder(
-            txid = Txid.fromString(originalTx.computeTxid().toString()),
-            feeRate = FeeRate.fromSatPerVb(2uL),
-        ).setExactSequence(0xfffffffdu).finish(wallet)
-        wallet.persist(persister)
-        assertTrue(wallet.sign(replacementPsbt))
-        val replacement = replacementPsbt.extractTx()
+        val feeBumpService = FeeBumpTransactionService()
+        val replacementPreview = feeBumpService.buildPreview(
+            wallet = wallet,
+            persister = persister,
+            originalTxid = originalTx.computeTxid().toString(),
+            requestedFeeRateSatVb = 2.0,
+            limits = FeeSafetyLimits(maximumFeePercentOfInputs = 100.0),
+        )
+        val replacement = feeBumpService.signApproved(wallet, replacementPreview)
         assertTrue(replacement.isExplicitlyRbf())
-        assertTrue(replacementPsbt.fee() > original.feeSats)
+        assertTrue(replacementPreview.replacementFeeSats > original.feeSats)
+        assertTrue(replacementPreview.additionalFeeSats >= replacementPreview.estimatedVbytes)
         val replacementData = replacement.output().mapNotNull { OpReturnScript.decode(it.scriptPubkey.toBytes()) }
         assertEquals(1, replacementData.size)
         assertTrue(replacementData.single().contentEquals(payload.utf8Bytes))
@@ -182,7 +182,7 @@ class RegtestTransactionInstrumentedTest {
         syncUntilSeen(client, replacement.computeTxid().toString())
 
         assertTrue(wallet.listOutput().none { OpReturnScript.isOpReturn(it.txout.scriptPubkey.toBytes()) })
-        assertEquals(balanceBefore - replacementPsbt.fee(), wallet.balance().total.toSat())
+        assertEquals(balanceBefore - replacementPreview.replacementFeeSats, wallet.balance().total.toSat())
     }
 
     private fun syncUntilSeen(client: EsploraClient, txid: String) {

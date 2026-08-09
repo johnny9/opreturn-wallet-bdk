@@ -12,6 +12,7 @@ import org.bitcoindevkit.DescriptorSecretKey
 import org.bitcoindevkit.KeychainKind
 import org.bitcoindevkit.Mnemonic
 import org.bitcoindevkit.Persister
+import org.bitcoindevkit.Txid
 import org.bitcoindevkit.WordCount
 import org.opreturnwallet.bdk.chain.EsploraChainService
 import org.opreturnwallet.bdk.message.OpReturnScript
@@ -20,7 +21,10 @@ import org.opreturnwallet.bdk.storage.EncryptedSeedStore
 import org.opreturnwallet.bdk.storage.WalletMetadata
 import org.opreturnwallet.bdk.storage.WalletPreferences
 import org.opreturnwallet.bdk.transaction.FeeSafetyLimits
+import org.opreturnwallet.bdk.transaction.FeeBumpPreview
+import org.opreturnwallet.bdk.transaction.FeeBumpTransactionService
 import org.opreturnwallet.bdk.transaction.MessageTransactionService
+import org.opreturnwallet.bdk.transaction.PreviewOutputKind
 import org.opreturnwallet.bdk.transaction.SweepTransactionPreview
 import org.opreturnwallet.bdk.transaction.SweepTransactionService
 import org.opreturnwallet.bdk.transaction.TransactionPreview
@@ -33,6 +37,7 @@ class WalletRepository(
     private val preferences: WalletPreferences,
     private val encryptedSeedStore: EncryptedSeedStore,
     private val transactionService: MessageTransactionService,
+    private val feeBumpTransactionService: FeeBumpTransactionService,
     private val sweepTransactionService: SweepTransactionService,
     private val mainnetOnly: Boolean = false,
 ) {
@@ -146,6 +151,50 @@ class WalletRepository(
                 pending = true,
                 blockHeight = null,
                 feeSats = preview.feeSats,
+                feeRateSatVb = preview.feeRateSatVb,
+                rbfEligible = preview.outputs.any { it.kind == PreviewOutputKind.CHANGE },
+            )
+        }
+
+    suspend fun buildFeeBumpPreview(
+        originalTxid: String,
+        feeRateSatVb: Double,
+        limits: FeeSafetyLimits = FeeSafetyLimits(),
+    ): FeeBumpPreview = withContext(Dispatchers.IO) {
+        val session = load()
+        feeBumpTransactionService.buildPreview(
+            wallet = session.wallet,
+            persister = session.persister,
+            originalTxid = originalTxid,
+            requestedFeeRateSatVb = feeRateSatVb,
+            limits = limits,
+        )
+    }
+
+    suspend fun signAndBroadcastFeeBump(preview: FeeBumpPreview): FeeBumpTransactionRecord =
+        withContext(Dispatchers.IO) {
+            val session = load()
+            val chain = EsploraChainService(session.network)
+            val update = chain.sync(session.wallet)
+            session.wallet.applyUpdate(update)
+            session.wallet.persist(session.persister)
+            val original = session.wallet.getTx(Txid.fromString(preview.originalTxid))
+                ?: throw org.opreturnwallet.bdk.transaction.TransactionPolicyException.TransactionNotFound
+            if (original.chainPosition !is ChainPosition.Unconfirmed) {
+                throw org.opreturnwallet.bdk.transaction.TransactionPolicyException.TransactionNotPending
+            }
+
+            val signed = feeBumpTransactionService.signApproved(session.wallet, preview)
+            chain.broadcast(signed)
+            session.wallet.persist(session.persister)
+            FeeBumpTransactionRecord(
+                originalTxid = preview.originalTxid,
+                replacementTxid = signed.computeTxid().toString(),
+                originalFeeSats = preview.originalFeeSats,
+                replacementFeeSats = preview.replacementFeeSats,
+                replacementFeeRateSatVb = preview.replacementFeeRateSatVb,
+                pending = true,
+                blockHeight = null,
             )
         }
 
@@ -266,6 +315,14 @@ class WalletRepository(
             val pendingTransaction = position is ChainPosition.Unconfirmed
             val blockHeight = (position as? ChainPosition.Confirmed)?.confirmationBlockTime?.blockId?.height
             val fee = runCatching { wallet.calculateFee(canonicalTx.transaction).toSat() }.getOrNull()
+            val feeRate = fee?.toDouble()
+                ?.div(canonicalTx.transaction.vsize().coerceAtLeast(1uL).toDouble())
+            val sendsWalletFunds = runCatching {
+                wallet.sentAndReceived(canonicalTx.transaction).sent.toSat() > 0uL
+            }.getOrDefault(false)
+            val hasInternalChange = canonicalTx.transaction.output().any { output ->
+                wallet.derivationOfSpk(output.scriptPubkey)?.keychain == KeychainKind.INTERNAL
+            }
             MessageTransactionRecord(
                 txid = canonicalTx.transaction.computeTxid().toString(),
                 message = text,
@@ -273,6 +330,12 @@ class WalletRepository(
                 pending = pendingTransaction,
                 blockHeight = blockHeight,
                 feeSats = fee,
+                feeRateSatVb = feeRate,
+                rbfEligible = pendingTransaction &&
+                    fee != null &&
+                    sendsWalletFunds &&
+                    hasInternalChange &&
+                    canonicalTx.transaction.isExplicitlyRbf(),
             )
         }
         return WalletSnapshot(

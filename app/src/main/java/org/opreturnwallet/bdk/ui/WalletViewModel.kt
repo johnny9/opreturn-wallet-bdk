@@ -16,6 +16,7 @@ import org.opreturnwallet.bdk.BuildConfig
 import org.opreturnwallet.bdk.message.OpReturnPayload
 import org.opreturnwallet.bdk.storage.WalletPreferences
 import org.opreturnwallet.bdk.transaction.WriteMode
+import org.opreturnwallet.bdk.wallet.MessageTransactionRecord
 import org.opreturnwallet.bdk.wallet.WalletNetwork
 import org.opreturnwallet.bdk.wallet.WalletRepository
 
@@ -151,10 +152,16 @@ class WalletViewModel(
                                 result.copy(pending = status.pending, blockHeight = status.blockHeight)
                             } ?: result
                         }
+                        val updatedFeeBumpResult = state.feeBumpResult?.let { result ->
+                            snapshot.transactionStatuses[result.replacementTxid]?.let { status ->
+                                result.copy(pending = status.pending, blockHeight = status.blockHeight)
+                            } ?: result
+                        }
                         state.copy(
                             snapshot = snapshot,
                             result = updatedResult,
                             sweepResult = updatedSweepResult,
+                            feeBumpResult = updatedFeeBumpResult,
                             screen = if (state.screen == Screen.LOADING) Screen.HOME else state.screen,
                             syncStatus = SyncStatus.CURRENT,
                         )
@@ -247,6 +254,82 @@ class WalletViewModel(
         _state.update { it.copy(result = result, preview = null, screen = Screen.RESULT) }
     }
 
+    fun startFeeBump(record: MessageTransactionRecord) {
+        check(record.pending && record.rbfEligible) {
+            "This transaction is not eligible for a fee bump"
+        }
+        val minimumHigherRate = (record.feeRateSatVb ?: 1.0) + 1.0
+        _state.update {
+            it.copy(
+                screen = Screen.FEE_BUMP,
+                feeBumpTarget = record,
+                feeBumpFeeRateText = "%.2f".format(minimumHigherRate),
+                feeBumpPreview = null,
+                feeBumpAcknowledged = false,
+                feeBumpResult = null,
+                error = null,
+            )
+        }
+        viewModelScope.launch {
+            runCatching { repository.estimatedFeeRate() }
+                .onSuccess { estimate ->
+                    _state.update { current ->
+                        if (current.feeBumpTarget?.txid != record.txid) current else current.copy(
+                            feeBumpFeeRateText = "%.2f".format(maxOf(estimate, minimumHigherRate)),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun updateFeeBumpFeeRate(value: String) =
+        _state.update { it.copy(feeBumpFeeRateText = value, error = null) }
+
+    fun buildFeeBumpPreview() = launchBusy {
+        val current = _state.value
+        val target = current.feeBumpTarget ?: error("Fee-bump transaction is missing")
+        val feeRate = current.feeBumpFeeRateText.toDoubleOrNull() ?: error("Enter a valid fee rate")
+        val synchronized = repository.sync()
+        val refreshedTarget = synchronized.messages.firstOrNull { it.txid == target.txid }
+            ?: error("The transaction is no longer available in this wallet")
+        check(refreshedTarget.pending) { "The transaction has already confirmed" }
+        check(refreshedTarget.rbfEligible) { "The transaction is no longer eligible for a fee bump" }
+        val preview = repository.buildFeeBumpPreview(
+            originalTxid = target.txid,
+            feeRateSatVb = feeRate,
+        )
+        _state.update {
+            it.copy(
+                snapshot = synchronized,
+                feeBumpTarget = refreshedTarget,
+                feeBumpPreview = preview,
+                feeBumpAcknowledged = false,
+                screen = Screen.FEE_BUMP_PREVIEW,
+            )
+        }
+    }
+
+    fun setFeeBumpAcknowledged(acknowledged: Boolean) {
+        _state.update { it.copy(feeBumpAcknowledged = acknowledged) }
+    }
+
+    fun broadcastFeeBump() = launchBusy {
+        val current = _state.value
+        check(current.feeBumpAcknowledged) {
+            "Acknowledge the additional fee and unchanged outputs before broadcasting"
+        }
+        val preview = current.feeBumpPreview ?: error("Fee-bump preview is missing")
+        val result = repository.signAndBroadcastFeeBump(preview)
+        _state.update {
+            it.copy(
+                feeBumpResult = result,
+                feeBumpPreview = null,
+                feeBumpAcknowledged = false,
+                screen = Screen.FEE_BUMP_RESULT,
+            )
+        }
+    }
+
     fun startSweep() {
         check((_state.value.snapshot?.balance?.totalSats ?: 0uL) > 0uL) {
             "The wallet has no funds to sweep"
@@ -337,6 +420,9 @@ class WalletViewModel(
                 sweepDestinationAddress = "",
                 sweepPreview = null,
                 sweepConfirmationText = "",
+                feeBumpTarget = null,
+                feeBumpPreview = null,
+                feeBumpAcknowledged = false,
                 busy = false,
                 error = null,
             )
@@ -350,6 +436,9 @@ class WalletViewModel(
                 preview = null,
                 sweepPreview = null,
                 sweepConfirmationText = "",
+                feeBumpTarget = null,
+                feeBumpPreview = null,
+                feeBumpAcknowledged = false,
                 error = null,
             )
         }
@@ -367,14 +456,19 @@ class WalletViewModel(
                     Screen.RESULT,
                     Screen.SWEEP,
                     Screen.SWEEP_RESULT,
+                    Screen.FEE_BUMP,
+                    Screen.FEE_BUMP_RESULT,
                     Screen.SETTINGS,
                     -> Screen.HOME
                     Screen.SWEEP_PREVIEW -> Screen.SWEEP
+                    Screen.FEE_BUMP_PREVIEW -> Screen.FEE_BUMP
                     else -> current.screen
                 },
                 preview = if (current.screen == Screen.PREVIEW) null else current.preview,
                 sweepPreview = if (current.screen == Screen.SWEEP_PREVIEW) null else current.sweepPreview,
                 sweepConfirmationText = if (current.screen == Screen.SWEEP_PREVIEW) "" else current.sweepConfirmationText,
+                feeBumpPreview = if (current.screen == Screen.FEE_BUMP_PREVIEW) null else current.feeBumpPreview,
+                feeBumpAcknowledged = if (current.screen == Screen.FEE_BUMP_PREVIEW) false else current.feeBumpAcknowledged,
                 restorePhrase = if (current.screen == Screen.RESTORE) "" else current.restorePhrase,
                 error = null,
             )
@@ -388,7 +482,13 @@ class WalletViewModel(
         monitorJob = viewModelScope.launch {
             while (true) {
                 delay(30.seconds)
-                if (_state.value.screen in setOf(Screen.HOME, Screen.RESULT, Screen.SWEEP_RESULT)) refresh()
+                if (_state.value.screen in setOf(
+                        Screen.HOME,
+                        Screen.RESULT,
+                        Screen.SWEEP_RESULT,
+                        Screen.FEE_BUMP_RESULT,
+                    )
+                ) refresh()
             }
         }
     }

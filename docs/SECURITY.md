@@ -32,6 +32,8 @@ Android `FLAG_SECURE` is applied to restore, recovery phrase, verification, and 
 - Mainnet wallet creation is hidden until explicitly enabled.
 - The Mainnet trial APK uses a separate application ID and repository-level Mainnet-only check.
 - Sweeps reject self-owned and wrong-network destinations, spend every available UTXO, create one external output, and require a typed confirmation.
+- Fee bumps are limited to unconfirmed RBF message transactions with internal change. They preserve non-change outputs exactly, reject newly added unconfirmed inputs, and require both a higher rate and incremental relay fee.
+- A fee-bump replacement is synchronized, previewed, acknowledged, commitment-checked after signing, and synchronized again before broadcast.
 - Only emulator-local Regtest cleartext traffic is permitted; public endpoints require TLS.
 
 ## Remaining risks
@@ -41,4 +43,5 @@ Android `FLAG_SECURE` is applied to restore, recovery phrase, verification, and 
 - The app has not received an external security audit.
 - Live Signet recovery and confirmation acceptance must be completed for each release build.
 - A sweep does not erase seed material, cover later incoming payments, or prove receipt before confirmation.
+- RBF is best-effort relay policy: a valid replacement can still be rejected, delayed, or lose a race to the original transaction.
 - Custom endpoints, hardware signing, authenticated Tor transport, and reproducible release builds are future work.

@@ -7,6 +7,7 @@ import org.opreturnwallet.bdk.message.OpReturnPayload
 import org.opreturnwallet.bdk.storage.WalletMetadata
 import org.opreturnwallet.bdk.transaction.WriteMode
 import org.opreturnwallet.bdk.ui.WalletUiState
+import org.opreturnwallet.bdk.wallet.FeeBumpTransactionRecord
 import org.opreturnwallet.bdk.wallet.MessageTransactionRecord
 import org.opreturnwallet.bdk.wallet.SweepTransactionRecord
 import org.opreturnwallet.bdk.wallet.WalletBalance
@@ -46,13 +47,33 @@ class SensitiveModelTest {
             sweepDestinationAddress = address,
             result = snapshot.messages.single(),
             sweepResult = SweepTransactionRecord("sweep-txid", address, 49_800uL, 200uL, true, null),
+            feeBumpTarget = snapshot.messages.single(),
+            feeBumpResult = FeeBumpTransactionRecord(
+                "private-txid",
+                "replacement-txid",
+                200uL,
+                400uL,
+                2.0,
+                true,
+                null,
+            ),
         )
 
-        assertRedacted(state, recovery, restore, message, address, "private-txid", "sweep-txid")
+        assertRedacted(
+            state,
+            recovery,
+            restore,
+            message,
+            address,
+            "private-txid",
+            "replacement-txid",
+            "sweep-txid",
+        )
         assertRedacted(snapshot, message, address, "private-txid")
         assertRedacted(snapshot.balance, "50000")
         assertRedacted(snapshot.messages.single(), message, "deadbeef", "private-txid")
         assertRedacted(state.sweepResult!!, address, "sweep-txid")
+        assertRedacted(state.feeBumpResult!!, "private-txid", "replacement-txid")
     }
 
     @Test

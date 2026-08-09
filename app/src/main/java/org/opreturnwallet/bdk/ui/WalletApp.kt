@@ -71,6 +71,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.fragment.app.FragmentActivity
 import org.opreturnwallet.bdk.BuildConfig
+import org.opreturnwallet.bdk.transaction.FeeBumpOutputKind
 import org.opreturnwallet.bdk.transaction.PreviewOutputKind
 import org.opreturnwallet.bdk.transaction.TransactionPreview
 import org.opreturnwallet.bdk.transaction.WriteMode
@@ -128,6 +129,9 @@ fun OpReturnWalletApp(viewModel: WalletViewModel) {
                     Screen.SWEEP -> SweepScreen(state, viewModel)
                     Screen.SWEEP_PREVIEW -> SweepPreviewScreen(state, viewModel)
                     Screen.SWEEP_RESULT -> SweepResultScreen(state, viewModel)
+                    Screen.FEE_BUMP -> FeeBumpScreen(state, viewModel)
+                    Screen.FEE_BUMP_PREVIEW -> FeeBumpPreviewScreen(state, viewModel)
+                    Screen.FEE_BUMP_RESULT -> FeeBumpResultScreen(state, viewModel)
                     Screen.SETTINGS -> SettingsScreen(state, viewModel)
                 }
             }
@@ -348,7 +352,9 @@ private fun HomeScreen(state: WalletUiState, viewModel: WalletViewModel) {
         if (snapshot.messages.isEmpty()) {
             Text("No OP_RETURN messages found in this wallet yet.")
         } else {
-            snapshot.messages.forEach { MessageCard(it, snapshot.network) }
+            snapshot.messages.forEach { record ->
+                MessageCard(record, snapshot.network, onBumpFee = { viewModel.startFeeBump(record) })
+            }
         }
     }
 }
@@ -365,13 +371,20 @@ private fun BalanceCard(snapshot: WalletSnapshot) {
 }
 
 @Composable
-private fun MessageCard(record: MessageTransactionRecord, network: WalletNetwork) {
+private fun MessageCard(
+    record: MessageTransactionRecord,
+    network: WalletNetwork,
+    onBumpFee: () -> Unit,
+) {
     val context = LocalContext.current
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(record.message, maxLines = 3, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
             Text(if (record.pending) "Pending" else "Confirmed at block ${record.blockHeight}")
             Text(record.txid, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (record.pending && record.rbfEligible) {
+                OutlinedButton(onClick = onBumpFee) { Text("Bump fee") }
+            }
             network.explorerUrl(record.txid)?.let { url ->
                 TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }) {
                     Text("Open in explorer")
@@ -556,6 +569,136 @@ private fun ResultScreen(state: WalletUiState, viewModel: WalletViewModel) {
                 }
             }
         }
+        if (result.pending && result.rbfEligible) {
+            OutlinedButton(
+                onClick = { viewModel.startFeeBump(result) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Bump transaction fee") }
+        }
+        Button(onClick = viewModel::goHome, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+    }
+}
+
+@Composable
+private fun FeeBumpScreen(state: WalletUiState, viewModel: WalletViewModel) {
+    val target = state.feeBumpTarget ?: return LoadingScreen("Loading pending transaction…")
+    ScreenColumn {
+        Text("Bump pending transaction", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("REPLACE-BY-FEE", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                Text("A replacement will keep the message and any anchor output unchanged. The extra mining fee is taken from wallet change.")
+            }
+        }
+        LabeledValue("Message", target.message)
+        LabeledValue("UTF-8 payload hex", target.payloadHex, monospace = true)
+        LabeledValue("Pending transaction", target.txid, monospace = true)
+        target.feeSats?.let { LabeledValue("Current fee", "$it sats") }
+        target.feeRateSatVb?.let {
+            LabeledValue("Current fee rate", "${"%.2f".format(it)} sat/vB")
+        }
+        OutlinedTextField(
+            value = state.feeBumpFeeRateText,
+            onValueChange = viewModel::updateFeeBumpFeeRate,
+            label = { Text("Replacement fee rate (sat/vB)") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text("The wallet synchronizes again before constructing the replacement.")
+        Button(
+            onClick = viewModel::buildFeeBumpPreview,
+            enabled = state.feeBumpFeeRateText.toDoubleOrNull() != null && !state.busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Build replacement preview") }
+        BusyIndicator(state.busy)
+    }
+}
+
+@Composable
+private fun FeeBumpPreviewScreen(state: WalletUiState, viewModel: WalletViewModel) {
+    val preview = state.feeBumpPreview ?: return LoadingScreen("Building fee-bump preview…")
+    val target = state.feeBumpTarget
+    ScreenColumn {
+        Text("Fee-bump preview", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Card(Modifier.fillMaxWidth()) {
+            Text(
+                "Review the added fee carefully. Preserved outputs must retain exactly the same value and script; only wallet change may shrink.",
+                modifier = Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.error,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        target?.let {
+            LabeledValue("Message", it.message)
+            LabeledValue("UTF-8 payload hex", it.payloadHex, monospace = true)
+        }
+        LabeledValue("Original transaction", preview.originalTxid, monospace = true)
+        LabeledValue("Original fee", "${preview.originalFeeSats} sats at ${"%.2f".format(preview.originalFeeRateSatVb)} sat/vB")
+        LabeledValue("Replacement fee", "${preview.replacementFeeSats} sats at ${"%.2f".format(preview.replacementFeeRateSatVb)} sat/vB")
+        LabeledValue("Additional fee", "+${preview.additionalFeeSats} sats")
+        LabeledValue("Replacement size", "${preview.estimatedVbytes} vB")
+        LabeledValue("Replacement inputs", "${preview.unsignedTransaction.input().size} input(s) · ${preview.inputValueSats} sats")
+        HorizontalDivider()
+        Text("Replacement outputs", style = MaterialTheme.typography.titleMedium)
+        preview.outputs.forEach { output ->
+            val label = when (output.kind) {
+                FeeBumpOutputKind.PRESERVED -> "Preserved"
+                FeeBumpOutputKind.CHANGE -> "Wallet change"
+            }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("${output.valueSats} sats · $label", fontWeight = FontWeight.Medium)
+                    Text(output.scriptHex, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        Card(Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = state.feeBumpAcknowledged,
+                    onCheckedChange = viewModel::setFeeBumpAcknowledged,
+                )
+                Text("I reviewed the additional fee and verified that the message and non-change outputs are unchanged.")
+            }
+        }
+        Button(
+            onClick = viewModel::broadcastFeeBump,
+            enabled = state.feeBumpAcknowledged && !state.busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Sign and broadcast replacement") }
+        BusyIndicator(state.busy)
+    }
+}
+
+@Composable
+private fun FeeBumpResultScreen(state: WalletUiState, viewModel: WalletViewModel) {
+    val result = state.feeBumpResult ?: return LoadingScreen("Finishing replacement…")
+    val network = state.snapshot?.network ?: state.selectedNetwork
+    val context = LocalContext.current
+    ScreenColumn {
+        Text("Replacement broadcast", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        LabeledValue("Status", if (result.pending) "Pending" else "Confirmed at block ${result.blockHeight}")
+        LabeledValue("Original transaction", result.originalTxid, monospace = true)
+        LabeledValue("Replacement transaction", result.replacementTxid, monospace = true)
+        LabeledValue("Original fee", "${result.originalFeeSats} sats")
+        LabeledValue(
+            "Replacement fee",
+            "${result.replacementFeeSats} sats at ${"%.2f".format(result.replacementFeeRateSatVb)} sat/vB",
+        )
+        LabeledValue("Additional fee", "+${result.replacementFeeSats - result.originalFeeSats} sats")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { copy(context, "Replacement transaction ID", result.replacementTxid) }) {
+                Icon(Icons.Default.ContentCopy, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Copy transaction ID")
+            }
+            network.explorerUrl(result.replacementTxid)?.let { url ->
+                OutlinedButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }) {
+                    Text("Explorer")
+                }
+            }
+        }
+        Text("The replacement remains pending until a miner confirms it.")
         Button(onClick = viewModel::goHome, modifier = Modifier.fillMaxWidth()) { Text("Done") }
     }
 }
@@ -834,6 +977,9 @@ private fun screenTitle(screen: Screen): String = when (screen) {
     Screen.SWEEP -> "Sweep wallet"
     Screen.SWEEP_PREVIEW -> "Sweep preview"
     Screen.SWEEP_RESULT -> "Sweep result"
+    Screen.FEE_BUMP -> "Bump fee"
+    Screen.FEE_BUMP_PREVIEW -> "Fee-bump preview"
+    Screen.FEE_BUMP_RESULT -> "Replacement result"
     Screen.SETTINGS -> "Settings"
     else -> "OP_RETURN Wallet"
 }

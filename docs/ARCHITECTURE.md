@@ -51,6 +51,26 @@ The fee is deducted from the single recipient output. A sweep never creates an O
 or wallet change output. A future payment to a previously revealed address is not included in an
 already-broadcast sweep.
 
+## Fee-bump pipeline
+
+```text
+eligible unconfirmed message transaction plus higher fee rate
+  → synchronize and verify the original is still unconfirmed and signals RBF
+  → BDK BumpFeeTxBuilder
+  → require every original input and only confirmed newly selected inputs
+  → preserve every non-internal-change output by exact value and script
+  → require a higher fee rate and an incremental fee of at least 1 sat/replacement-vB
+  → enforce normal absolute and percentage fee limits
+  → preview exact scripts, replacement fee, and added fee
+  → require explicit replacement acknowledgment
+  → sign and compare with the approved input/output commitment
+  → synchronize once more, broadcast, and monitor the replacement txid
+```
+
+Only outgoing pending message transactions with internal change are exposed as eligible. This
+excludes confirmed transactions, non-RBF transactions, sweep transactions, and replacements that
+would have no wallet change available to fund the added fee.
+
 ## Output policy
 
 - Exactly one `OP_RETURN` output.
@@ -68,6 +88,7 @@ already-broadcast sweep.
 - Default maximum absolute fee: 100,000 sats.
 - Default maximum fee percentage: 10% of selected input value.
 - Anchor flows visibly warn when the fee exceeds the anchor value.
+- Fee bumps retain the absolute and percentage limits and enforce the incremental relay fee.
 - Developer consume mode is Regtest/debug-only, selects exactly one UTXO, creates no change, and retains the absolute fee limit.
 
 ## Isolated Mainnet trial build

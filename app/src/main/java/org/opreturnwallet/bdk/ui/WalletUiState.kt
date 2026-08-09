@@ -1,8 +1,10 @@
 package org.opreturnwallet.bdk.ui
 
+import org.opreturnwallet.bdk.transaction.FeeBumpPreview
 import org.opreturnwallet.bdk.transaction.TransactionPreview
 import org.opreturnwallet.bdk.transaction.SweepTransactionPreview
 import org.opreturnwallet.bdk.security.SensitiveModel
+import org.opreturnwallet.bdk.wallet.FeeBumpTransactionRecord
 import org.opreturnwallet.bdk.wallet.MessageTransactionRecord
 import org.opreturnwallet.bdk.wallet.SweepTransactionRecord
 import org.opreturnwallet.bdk.wallet.WalletNetwork
@@ -23,6 +25,9 @@ enum class Screen {
     SWEEP,
     SWEEP_PREVIEW,
     SWEEP_RESULT,
+    FEE_BUMP,
+    FEE_BUMP_PREVIEW,
+    FEE_BUMP_RESULT,
     SETTINGS,
 }
 
@@ -65,6 +70,11 @@ data class WalletUiState(
     val sweepPreview: SweepTransactionPreview? = null,
     val sweepConfirmationText: String = "",
     val sweepResult: SweepTransactionRecord? = null,
+    val feeBumpTarget: MessageTransactionRecord? = null,
+    val feeBumpFeeRateText: String = "2.0",
+    val feeBumpPreview: FeeBumpPreview? = null,
+    val feeBumpAcknowledged: Boolean = false,
+    val feeBumpResult: FeeBumpTransactionRecord? = null,
     val biometricUnlockEnabled: Boolean = false,
     val busy: Boolean = false,
     val error: String? = null,

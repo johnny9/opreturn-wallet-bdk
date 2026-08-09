@@ -62,6 +62,32 @@ data class SweepTransactionPreview(
     val commitment: TransactionCommitment,
 ) : SensitiveModel("SweepTransactionPreview")
 
+enum class FeeBumpOutputKind {
+    PRESERVED,
+    CHANGE,
+}
+
+data class FeeBumpOutput(
+    val valueSats: ULong,
+    val scriptHex: String,
+    val kind: FeeBumpOutputKind,
+) : SensitiveModel("FeeBumpOutput")
+
+data class FeeBumpPreview(
+    val originalTxid: String,
+    val originalFeeRateSatVb: Double,
+    val replacementFeeRateSatVb: Double,
+    val originalFeeSats: ULong,
+    val replacementFeeSats: ULong,
+    val additionalFeeSats: ULong,
+    val inputValueSats: ULong,
+    val estimatedVbytes: ULong,
+    val outputs: List<FeeBumpOutput>,
+    val psbt: Psbt,
+    val unsignedTransaction: Transaction,
+    val commitment: TransactionCommitment,
+) : SensitiveModel("FeeBumpPreview")
+
 sealed class TransactionPolicyException(message: String) : IllegalArgumentException(message) {
     data object MissingInput : TransactionPolicyException("Transaction has no input")
     data object MissingChange : TransactionPolicyException("Transaction does not contain the required wallet change")
@@ -71,6 +97,20 @@ sealed class TransactionPolicyException(message: String) : IllegalArgumentExcept
         TransactionPolicyException("Sweep destination belongs to this wallet; choose an external wallet address")
     data object IncompleteSweep :
         TransactionPolicyException("Sweep does not spend every currently available wallet UTXO")
+    data object TransactionNotFound :
+        TransactionPolicyException("The transaction is no longer available in this wallet")
+    data object TransactionNotPending :
+        TransactionPolicyException("Only an unconfirmed transaction can be fee-bumped")
+    data object NotBumpable :
+        TransactionPolicyException("This transaction does not have replaceable wallet change")
+    data object ReplacementInputsMismatch :
+        TransactionPolicyException("The replacement does not spend every original input")
+    data object ReplacementAddsUnconfirmedInput :
+        TransactionPolicyException("The replacement adds an unconfirmed input")
+    data object ReplacementFeeRateNotHigher :
+        TransactionPolicyException("Replacement fee rate must be higher than the current fee rate")
+    data object ReplacementFeeIncreaseTooSmall :
+        TransactionPolicyException("Replacement fee increase is too small for reliable relay")
     data class FeeTooHigh(val feeSats: ULong, val maximumSats: ULong) :
         TransactionPolicyException("Fee $feeSats sats exceeds the $maximumSats sat limit")
 
